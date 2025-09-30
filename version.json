@@ -1,0 +1,6 @@
+{
+  "version": "1.0.1",
+  "downloadUrl": "http://你的服务器IP或域名/downloads/latest.apk",
+  "notes": "1. 修复了若干已知bug。\n2. 优化了应用的性能和稳定性。",
+  "forceUpdate": false
+}
