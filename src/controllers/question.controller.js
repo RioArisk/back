@@ -198,33 +198,59 @@ const getQuestionsByIds = async (req, res) => {
 };
 
 const searchByContent = async (req, res) => {
-  const { keyword } = req.query;
+  const { keyword, page = 1, pageSize = 5 } = req.query;
 
   if (!keyword) {
     return res.status(400).json({
       error: '参数缺失',
       message: '`keyword` 是必需的查询参数。',
-      example: '/api/questions/search-by-content?keyword=your_keyword'
+      example: '/api/questions/search-by-content?keyword=your_keyword&page=1&pageSize=5'
     });
   }
 
   try {
+    const offset = (page - 1) * pageSize;
+    const limit = parseInt(pageSize, 10);
+
     // 规范化关键词，并在 SQL 端做同样的规范化（大小写 + 全/半角括号、逗号、句号）
     const normalizedKeyword = normalizeToSearch(keyword);
     const likePattern = `%${escapeForLike(normalizedKeyword)}%`;
     const titleExpr = normalizedSqlExpr('title');
 
+    // 先获取前100条匹配的结果
     const sql = `
       SELECT id, title, explain_text, difficulty_text, options_json, answer, kind_text, Qtree1, Qtree2 
       FROM questions 
       WHERE ${titleExpr} LIKE ?
-      LIMIT 5
+      LIMIT 100
     `;
 
-    const questions = await db.query(sql, [likePattern]);
+    const allQuestions = await db.query(sql, [likePattern]);
     
-    console.log(`🔍 题干搜索: 原始关键词="${keyword}", 规范化="${normalizedKeyword}", 结果=${questions.length}`);
-    res.status(200).json(questions);
+    // 去重：相同题干内容只保留第一条
+    const uniqueQuestions = [];
+    const seenTitles = new Set();
+    
+    for (const question of allQuestions) {
+      const normalizedTitle = normalizeToSearch(question.title || '');
+      if (!seenTitles.has(normalizedTitle)) {
+        seenTitles.add(normalizedTitle);
+        uniqueQuestions.push(question);
+      }
+    }
+
+    // 分页处理
+    const total = uniqueQuestions.length;
+    const paginatedQuestions = uniqueQuestions.slice(offset, offset + limit);
+
+    console.log(`🔍 题干搜索: 原始关键词="${keyword}", 规范化="${normalizedKeyword}", 找到${allQuestions.length}条, 去重后${total}条结果`);
+    
+    res.status(200).json({
+      total,
+      page: parseInt(page, 10),
+      pageSize: limit,
+      data: paginatedQuestions
+    });
   } catch (error) {
     console.error('根据题干内容搜题时出错:', error);
     res.status(500).json({
