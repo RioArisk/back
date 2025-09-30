@@ -1,4 +1,5 @@
 const db = require('../db/mysql');
+const { normalizeToSearch, escapeForLike, normalizedSqlExpr } = require('../utils/normalize');
 
 const getQuestions = async (req, res) => {
   // 1. 从查询参数中获取筛选条件，移除 kind_text
@@ -145,20 +146,21 @@ const searchByContent = async (req, res) => {
   }
 
   try {
-    // 修复：只搜索题干内容
+    // 规范化关键词，并在 SQL 端做同样的规范化（大小写 + 全/半角括号、逗号、句号）
+    const normalizedKeyword = normalizeToSearch(keyword);
+    const likePattern = `%${escapeForLike(normalizedKeyword)}%`;
+    const titleExpr = normalizedSqlExpr('title');
+
     const sql = `
       SELECT id, title, explain_text, difficulty_text, options_json, answer, kind_text, Qtree1, Qtree2 
       FROM questions 
-      WHERE LOWER(title) LIKE ?
+      WHERE ${titleExpr} LIKE ? ESCAPE '\\'
       LIMIT 5
     `;
-    // 兼容大小写：将关键词转小写，并对比 LOWER(title)
-    const searchPattern = `%${String(keyword).toLowerCase()}%`;
-    const questions = await db.query(sql, [searchPattern]);
+
+    const questions = await db.query(sql, [likePattern]);
     
-    // 添加调试信息
-    console.log(`🔍 题干搜索: 关键词="${keyword}", 找到${questions.length}条结果`);
-    
+    console.log(`🔍 题干搜索: 原始关键词="${keyword}", 规范化="${normalizedKeyword}", 结果=${questions.length}`);
     res.status(200).json(questions);
   } catch (error) {
     console.error('根据题干内容搜题时出错:', error);
@@ -213,14 +215,21 @@ const searchByAnswer = async (req, res) => {
         }
         
         // 获取正确答案（可能是单个字母如"A"或多个字母如"AB"）
-        const correctAnswers = question.answer.split(''); // 将"AB"分割为["A","B"]
-        
-        // 检查正确答案对应的选项内容是否包含搜索关键词
+        const correctAnswers = String(question.answer || '').split('');
+
+        // 规范化用户输入
+        const normalizedUser = normalizeToSearch(answer);
+
+        // 检查正确答案对应的选项内容是否包含搜索关键词（规范化匹配）
         let hasMatch = false;
         for (const answerKey of correctAnswers) {
-          if (options[answerKey] && options[answerKey].includes(answer)) {
-            hasMatch = true;
-            break;
+          const optionValue = options[answerKey];
+          if (optionValue !== undefined && optionValue !== null) {
+            const normalizedOption = normalizeToSearch(optionValue);
+            if (normalizedOption.includes(normalizedUser)) {
+              hasMatch = true;
+              break;
+            }
           }
         }
         
@@ -238,7 +247,7 @@ const searchByAnswer = async (req, res) => {
     const paginatedQuestions = matchedQuestions.slice(offset, offset + limit);
 
     // 添加调试信息
-    console.log(`🔍 答案搜索: 关键词="${answer}", 找到${total}条结果`);
+    console.log(`🔍 答案搜索: 原始关键词="${answer}", 规范化="${normalizeToSearch(answer)}", 找到${total}条结果`);
 
     res.status(200).json({
       total,
@@ -270,27 +279,31 @@ const searchByOptions = async (req, res) => {
     const offset = (page - 1) * pageSize;
     const limit = parseInt(pageSize, 10);
 
-    // 优化：在选项内容中搜索，使用更灵活的查询
+    // 优化：在选项内容中搜索（大小写无关 + 全/半角括号、逗号、句号统一）
+    const optionsExpr = normalizedSqlExpr('options_json');
+    const normalizedOption = normalizeToSearch(option);
+    const likePattern = `%${escapeForLike(normalizedOption)}%`;
+    const prioritizedPattern = `%"${escapeForLike(normalizedOption)}"%`;
+
     const sql = `
       SELECT id, title, explain_text, difficulty_text, options_json, answer, kind_text, Qtree1, Qtree2 
       FROM questions 
-      WHERE options_json LIKE ?
+      WHERE ${optionsExpr} LIKE ? ESCAPE '\\'
       ORDER BY 
         CASE 
-          WHEN options_json LIKE ? THEN 1 
+          WHEN ${optionsExpr} LIKE ? ESCAPE '\\' THEN 1 
           ELSE 2 
         END
       LIMIT ? OFFSET ?
     `;
-    const searchPattern = `%${option}%`;
-    const questions = await db.query(sql, [searchPattern, `%"${option}"%`, limit, offset]);
+    const questions = await db.query(sql, [likePattern, prioritizedPattern, limit, offset]);
     
-    const countSql = 'SELECT COUNT(*) as total FROM questions WHERE options_json LIKE ?';
-    const totalResult = await db.query(countSql, [searchPattern]);
+    const countSql = `SELECT COUNT(*) as total FROM questions WHERE ${optionsExpr} LIKE ? ESCAPE '\\'`;
+    const totalResult = await db.query(countSql, [likePattern]);
     const total = totalResult[0].total;
 
     // 添加调试信息
-    console.log(`🔍 选项搜索: 关键词="${option}", 找到${total}条结果`);
+    console.log(`🔍 选项搜索: 原始关键词="${option}", 规范化="${normalizedOption}", 找到${total}条结果`);
 
     res.status(200).json({
       total,
