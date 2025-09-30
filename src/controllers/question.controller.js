@@ -1,5 +1,5 @@
 const db = require('../db/mysql');
-const { normalizeToSearch, escapeForLike, normalizedSqlExpr } = require('../utils/normalize');
+const { normalizeToSearch, escapeForLike, normalizedSqlExpr, normalizeKeyChar } = require('../utils/normalize');
 
 const getQuestions = async (req, res) => {
   // 1. 从查询参数中获取筛选条件，移除 kind_text
@@ -214,8 +214,24 @@ const searchByAnswer = async (req, res) => {
           options = optionsObj;
         }
         
+        // 构建规范化后的选项键映射（A/B/C 或 1/2/3 均可）
+        const normalizedOptions = {};
+        if (options && typeof options === 'object') {
+          Object.keys(options).forEach(k => {
+            const nk = normalizeKeyChar(k);
+            if (nk) {
+              normalizedOptions[nk] = String(options[k]);
+            }
+          });
+        }
+        
         // 获取正确答案（可能是单个字母如"A"或多个字母如"AB"）
-        const correctAnswers = String(question.answer || '').split('');
+        const correctAnswersRaw = String(question.answer || '');
+        const correctAnswers = [];
+        for (const ch of correctAnswersRaw) {
+          const nk = normalizeKeyChar(ch);
+          if (nk) correctAnswers.push(nk);
+        }
 
         // 规范化用户输入
         const normalizedUser = normalizeToSearch(answer);
@@ -223,7 +239,7 @@ const searchByAnswer = async (req, res) => {
         // 检查正确答案对应的选项内容是否包含搜索关键词（规范化匹配）
         let hasMatch = false;
         for (const answerKey of correctAnswers) {
-          const optionValue = options[answerKey];
+          const optionValue = normalizedOptions[answerKey] ?? options[answerKey];
           if (optionValue !== undefined && optionValue !== null) {
             const normalizedOption = normalizeToSearch(optionValue);
             if (normalizedOption.includes(normalizedUser)) {

@@ -53,4 +53,48 @@ module.exports = {
   normalizedSqlExpr,
 };
 
+// 将全角字母/数字转换为半角；保留其他字符
+function toHalfWidthAlphaNumeric(input) {
+  if (input === null || input === undefined) return '';
+  let out = '';
+  const s = String(input);
+  for (let i = 0; i < s.length; i++) {
+    const code = s.charCodeAt(i);
+    // 全角数字 ０-９
+    if (code >= 0xFF10 && code <= 0xFF19) {
+      out += String.fromCharCode(code - 0xFF10 + 0x30);
+      continue;
+    }
+    // 全角大写 A-Z
+    if (code >= 0xFF21 && code <= 0xFF3A) {
+      out += String.fromCharCode(code - 0xFF21 + 0x41);
+      continue;
+    }
+    // 全角小写 a-z
+    if (code >= 0xFF41 && code <= 0xFF5A) {
+      out += String.fromCharCode(code - 0xFF41 + 0x61);
+      continue;
+    }
+    out += s[i];
+  }
+  return out;
+}
+
+/**
+ * 规范化选项键字符（如 A/B/C 或 1/2/3）：
+ * - 全角转半角
+ * - 转为大写
+ * - 提取第一个 [A-Z0-9] 字符
+ */
+function normalizeKeyChar(input) {
+  if (input === null || input === undefined) return '';
+  const half = toHalfWidthAlphaNumeric(input);
+  const upper = String(half).toUpperCase();
+  const match = upper.match(/[A-Z0-9]/);
+  return match ? match[0] : '';
+}
+
+module.exports.toHalfWidthAlphaNumeric = toHalfWidthAlphaNumeric;
+module.exports.normalizeKeyChar = normalizeKeyChar;
+
 
