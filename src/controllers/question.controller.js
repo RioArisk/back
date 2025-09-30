@@ -217,33 +217,48 @@ const searchByContent = async (req, res) => {
     const likePattern = `%${escapeForLike(normalizedKeyword)}%`;
     const titleExpr = normalizedSqlExpr('title');
 
-    // 先获取前100条匹配的结果
+    // 获取所有匹配的题目（用于分组）
     const sql = `
       SELECT id, title, explain_text, difficulty_text, options_json, answer, kind_text, Qtree1, Qtree2 
       FROM questions 
       WHERE ${titleExpr} LIKE ?
-      LIMIT 100
     `;
 
-    const allQuestions = await db.query(sql, [likePattern]);
+    const allMatchedQuestions = await db.query(sql, [likePattern]);
     
-    // 去重：相同题干内容只保留第一条
-    const uniqueQuestions = [];
-    const seenTitles = new Set();
+    // 按 Qtree1 分组
+    const groupedByQtree1 = {};
+    for (const question of allMatchedQuestions) {
+      const qtree1 = question.Qtree1 || '未分类';
+      if (!groupedByQtree1[qtree1]) {
+        groupedByQtree1[qtree1] = [];
+      }
+      groupedByQtree1[qtree1].push(question);
+    }
+
+    // 从每个分类中取约10题，总共不超过100题
+    const selectedQuestions = [];
+    const categories = Object.keys(groupedByQtree1);
+    const questionsPerCategory = 10;
     
-    for (const question of allQuestions) {
-      const normalizedTitle = normalizeToSearch(question.title || '');
-      if (!seenTitles.has(normalizedTitle)) {
-        seenTitles.add(normalizedTitle);
-        uniqueQuestions.push(question);
+    for (const category of categories) {
+      const categoryQuestions = groupedByQtree1[category].slice(0, questionsPerCategory);
+      selectedQuestions.push(...categoryQuestions);
+      
+      // 如果已经达到100题，停止添加
+      if (selectedQuestions.length >= 100) {
+        break;
       }
     }
 
-    // 分页处理
-    const total = uniqueQuestions.length;
-    const paginatedQuestions = uniqueQuestions.slice(offset, offset + limit);
+    // 限制总数为100题
+    const finalQuestions = selectedQuestions.slice(0, 100);
 
-    console.log(`🔍 题干搜索: 原始关键词="${keyword}", 规范化="${normalizedKeyword}", 找到${allQuestions.length}条, 去重后${total}条结果`);
+    // 分页处理
+    const total = finalQuestions.length;
+    const paginatedQuestions = finalQuestions.slice(offset, offset + limit);
+
+    console.log(`🔍 题干搜索: 原始关键词="${keyword}", 规范化="${normalizedKeyword}", 找到${allMatchedQuestions.length}条, ${categories.length}个分类, 筛选后${total}条结果`);
     
     res.status(200).json({
       total,
