@@ -154,7 +154,7 @@ const searchByContent = async (req, res) => {
     const sql = `
       SELECT id, title, explain_text, difficulty_text, options_json, answer, kind_text, Qtree1, Qtree2 
       FROM questions 
-      WHERE ${titleExpr} LIKE ? ESCAPE '\\'
+      WHERE ${titleExpr} LIKE ?
       LIMIT 5
     `;
 
@@ -288,17 +288,17 @@ const searchByOptions = async (req, res) => {
     const sql = `
       SELECT id, title, explain_text, difficulty_text, options_json, answer, kind_text, Qtree1, Qtree2 
       FROM questions 
-      WHERE ${optionsExpr} LIKE ? ESCAPE '\\'
+      WHERE ${optionsExpr} LIKE ?
       ORDER BY 
         CASE 
-          WHEN ${optionsExpr} LIKE ? ESCAPE '\\' THEN 1 
+          WHEN ${optionsExpr} LIKE ? THEN 1 
           ELSE 2 
         END
       LIMIT ? OFFSET ?
     `;
     const questions = await db.query(sql, [likePattern, prioritizedPattern, limit, offset]);
     
-    const countSql = `SELECT COUNT(*) as total FROM questions WHERE ${optionsExpr} LIKE ? ESCAPE '\\'`;
+    const countSql = `SELECT COUNT(*) as total FROM questions WHERE ${optionsExpr} LIKE ?`;
     const totalResult = await db.query(countSql, [likePattern]);
     const total = totalResult[0].total;
 
