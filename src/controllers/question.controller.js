@@ -252,7 +252,26 @@ const searchByContent = async (req, res) => {
     }
 
     // 限制总数为100题
-    const finalQuestions = selectedQuestions.slice(0, 100);
+    let finalQuestions = selectedQuestions.slice(0, 100);
+
+    // 按相关性排序：关键词在题干中出现的位置越靠前，越相关
+    finalQuestions.sort((a, b) => {
+      const normalizedTitleA = normalizeToSearch(a.title || '');
+      const normalizedTitleB = normalizeToSearch(b.title || '');
+      const indexA = normalizedTitleA.indexOf(normalizedKeyword);
+      const indexB = normalizedTitleB.indexOf(normalizedKeyword);
+      
+      // 都包含关键词，按出现位置排序
+      if (indexA !== -1 && indexB !== -1) {
+        return indexA - indexB;
+      }
+      // 只有A包含，A排前面
+      if (indexA !== -1) return -1;
+      // 只有B包含，B排前面
+      if (indexB !== -1) return 1;
+      // 都不包含，保持原顺序
+      return 0;
+    });
 
     // 分页处理
     const total = finalQuestions.length;
@@ -340,12 +359,44 @@ const searchByAnswer = async (req, res) => {
       }
     }
 
+    // 按 Qtree1 分组
+    const groupedByQtree1 = {};
+    for (const question of matchedQuestions) {
+      const qtree1 = question.Qtree1 || '未分类';
+      if (!groupedByQtree1[qtree1]) {
+        groupedByQtree1[qtree1] = [];
+      }
+      groupedByQtree1[qtree1].push(question);
+    }
+
+    // 从每个分类中取约10题，总共不超过100题
+    const selectedQuestions = [];
+    const categories = Object.keys(groupedByQtree1);
+    const questionsPerCategory = 10;
+    
+    for (const category of categories) {
+      const categoryQuestions = groupedByQtree1[category].slice(0, questionsPerCategory);
+      selectedQuestions.push(...categoryQuestions);
+      
+      // 如果已经达到100题，停止添加
+      if (selectedQuestions.length >= 100) {
+        break;
+      }
+    }
+
+    // 限制总数为100题
+    let finalQuestions = selectedQuestions.slice(0, 100);
+
+    // 按相关性排序：匹配度更高的排在前面（这里简单按id排序保证稳定性，也可以按其他规则）
+    // 由于答案搜索已经是精确匹配，这里打乱顺序让不同分类交叉展示
+    finalQuestions.sort(() => Math.random() - 0.5);
+
     // 分页处理
-    const total = matchedQuestions.length;
-    const paginatedQuestions = matchedQuestions.slice(offset, offset + limit);
+    const total = finalQuestions.length;
+    const paginatedQuestions = finalQuestions.slice(offset, offset + limit);
 
     // 添加调试信息
-    console.log(`🔍 答案搜索: 原始关键词="${answer}", 规范化="${normalizeToSearch(answer)}", 找到${total}条结果`);
+    console.log(`🔍 答案搜索: 原始关键词="${answer}", 规范化="${normalizeToSearch(answer)}", 找到${matchedQuestions.length}条, ${categories.length}个分类, 筛选后${total}条结果`);
 
     res.status(200).json({
       total,
@@ -381,33 +432,74 @@ const searchByOptions = async (req, res) => {
     const optionsExpr = normalizedSqlExpr('options_json');
     const normalizedOption = normalizeToSearch(option);
     const likePattern = `%${escapeForLike(normalizedOption)}%`;
-    const prioritizedPattern = `%"${escapeForLike(normalizedOption)}"%`;
 
+    // 获取所有匹配的题目（用于分组）
     const sql = `
       SELECT id, title, explain_text, difficulty_text, options_json, answer, kind_text, Qtree1, Qtree2 
       FROM questions 
       WHERE ${optionsExpr} LIKE ?
-      ORDER BY 
-        CASE 
-          WHEN ${optionsExpr} LIKE ? THEN 1 
-          ELSE 2 
-        END
-      LIMIT ? OFFSET ?
     `;
-    const questions = await db.query(sql, [likePattern, prioritizedPattern, limit, offset]);
+    const allMatchedQuestions = await db.query(sql, [likePattern]);
+
+    // 按 Qtree1 分组
+    const groupedByQtree1 = {};
+    for (const question of allMatchedQuestions) {
+      const qtree1 = question.Qtree1 || '未分类';
+      if (!groupedByQtree1[qtree1]) {
+        groupedByQtree1[qtree1] = [];
+      }
+      groupedByQtree1[qtree1].push(question);
+    }
+
+    // 从每个分类中取约10题，总共不超过100题
+    const selectedQuestions = [];
+    const categories = Object.keys(groupedByQtree1);
+    const questionsPerCategory = 10;
     
-    const countSql = `SELECT COUNT(*) as total FROM questions WHERE ${optionsExpr} LIKE ?`;
-    const totalResult = await db.query(countSql, [likePattern]);
-    const total = totalResult[0].total;
+    for (const category of categories) {
+      const categoryQuestions = groupedByQtree1[category].slice(0, questionsPerCategory);
+      selectedQuestions.push(...categoryQuestions);
+      
+      // 如果已经达到100题，停止添加
+      if (selectedQuestions.length >= 100) {
+        break;
+      }
+    }
+
+    // 限制总数为100题
+    let finalQuestions = selectedQuestions.slice(0, 100);
+
+    // 按相关性排序：关键词在选项中出现的位置越靠前，越相关
+    finalQuestions.sort((a, b) => {
+      const normalizedOptionsA = normalizeToSearch(a.options_json || '');
+      const normalizedOptionsB = normalizeToSearch(b.options_json || '');
+      const indexA = normalizedOptionsA.indexOf(normalizedOption);
+      const indexB = normalizedOptionsB.indexOf(normalizedOption);
+      
+      // 都包含关键词，按出现位置排序
+      if (indexA !== -1 && indexB !== -1) {
+        return indexA - indexB;
+      }
+      // 只有A包含，A排前面
+      if (indexA !== -1) return -1;
+      // 只有B包含，B排前面
+      if (indexB !== -1) return 1;
+      // 都不包含，保持原顺序
+      return 0;
+    });
+
+    // 分页处理
+    const total = finalQuestions.length;
+    const paginatedQuestions = finalQuestions.slice(offset, offset + limit);
 
     // 添加调试信息
-    console.log(`🔍 选项搜索: 原始关键词="${option}", 规范化="${normalizedOption}", 找到${total}条结果`);
+    console.log(`🔍 选项搜索: 原始关键词="${option}", 规范化="${normalizedOption}", 找到${allMatchedQuestions.length}条, ${categories.length}个分类, 筛选后${total}条结果`);
 
     res.status(200).json({
       total,
       page: parseInt(page, 10),
       pageSize: limit,
-      data: questions
+      data: paginatedQuestions
     });
   } catch (error) {
     console.error('根据选项搜题时出错:', error);
