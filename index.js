@@ -10,6 +10,7 @@ const app = express();
 app.use(cors()); // 启用 CORS，允许所有跨域请求
 app.use(express.json()); // 解析 JSON 请求体
 app.use(express.static(path.join(__dirname, 'public'))); // 托管 public 目录下的静态文件
+app.use('/apk', express.static(path.join(__dirname, 'apk'))); // 托管 apk 目录下的APK文件供下载
 
 
 // 2. 注册 API 路由
