@@ -1,5 +1,68 @@
 const db = require('../db/mysql');
-const { normalizeToSearch, escapeForLike, normalizedSqlExpr, normalizeKeyChar } = require('../utils/normalize');
+const { normalizeToSearch, escapeForLike, normalizedSqlExpr, normalizeKeyChar, toHalfWidthAlphaNumeric } = require('../utils/normalize');
+
+// 构建规范化后的选项映射：{ A: '内容', B: '内容', 1: '内容' }
+function buildOptionsMap(raw) {
+  const map = {};
+  let options = raw;
+  try {
+    if (typeof raw === 'string') {
+      options = JSON.parse(raw);
+    }
+  } catch (e) {
+    return map;
+  }
+
+  // 处理数组：可能是对象数组或字符串数组
+  if (Array.isArray(options)) {
+    for (const item of options) {
+      if (item == null) continue;
+      if (typeof item === 'string') {
+        const s = item.trim();
+        // 尝试从前缀提取键，如："A. 文本"、"A、文本"、"A) 文本"、"１）文本"
+        const firstChar = s.charAt(0);
+        const nk = normalizeKeyChar(firstChar);
+        if (nk) {
+          const rest = s.replace(/^\s*[A-Za-z0-9Ａ-Ｚａ-ｚ０-９][\.|、|\)|）]?\s*/, '');
+          map[nk] = String(rest);
+          continue;
+        }
+        // 无法提取键，跳过
+        continue;
+      }
+      if (typeof item === 'object') {
+        const keyCandidate = item.key ?? item.K ?? item.label ?? item.option ?? item.opt ?? item.k;
+        const valCandidate = item.value ?? item.text ?? item.label ?? item.content ?? item.v ?? item.optionValue ?? item.val;
+        if (keyCandidate !== undefined) {
+          const nk = normalizeKeyChar(keyCandidate);
+          if (nk) {
+            map[nk] = String(valCandidate ?? '');
+            continue;
+          }
+        }
+        // 尝试对象键值形式：{"A":"文本"}
+        for (const [k, v] of Object.entries(item)) {
+          const nk = normalizeKeyChar(k);
+          if (nk) {
+            map[nk] = String(v ?? '');
+          }
+        }
+      }
+    }
+    return map;
+  }
+
+  // 处理对象：{"A":"文本"} 或 {"1":"文本"}
+  if (options && typeof options === 'object') {
+    for (const [k, v] of Object.entries(options)) {
+      const nk = normalizeKeyChar(k);
+      if (nk) {
+        map[nk] = String(v ?? '');
+      }
+    }
+  }
+  return map;
+}
 
 const getQuestions = async (req, res) => {
   // 1. 从查询参数中获取筛选条件，移除 kind_text
@@ -200,30 +263,8 @@ const searchByAnswer = async (req, res) => {
     // 在应用层进行过滤
     for (const question of allQuestions) {
       try {
-        // 解析选项JSON
-        let options = JSON.parse(question.options_json);
-        
-        // 处理数组格式的选项数据
-        if (Array.isArray(options)) {
-          const optionsObj = {};
-          options.forEach(item => {
-            if (item.key && item.value !== undefined) {
-              optionsObj[item.key] = String(item.value);
-            }
-          });
-          options = optionsObj;
-        }
-        
-        // 构建规范化后的选项键映射（A/B/C 或 1/2/3 均可）
-        const normalizedOptions = {};
-        if (options && typeof options === 'object') {
-          Object.keys(options).forEach(k => {
-            const nk = normalizeKeyChar(k);
-            if (nk) {
-              normalizedOptions[nk] = String(options[k]);
-            }
-          });
-        }
+        // 构建规范化后的选项键映射（兼容多种 JSON 结构）
+        const normalizedOptions = buildOptionsMap(question.options_json);
         
         // 获取正确答案（可能是单个字母如"A"或多个字母如"AB"）
         const correctAnswersRaw = String(question.answer || '');
@@ -239,7 +280,7 @@ const searchByAnswer = async (req, res) => {
         // 检查正确答案对应的选项内容是否包含搜索关键词（规范化匹配）
         let hasMatch = false;
         for (const answerKey of correctAnswers) {
-          const optionValue = normalizedOptions[answerKey] ?? options[answerKey];
+          const optionValue = normalizedOptions[answerKey];
           if (optionValue !== undefined && optionValue !== null) {
             const normalizedOption = normalizeToSearch(optionValue);
             if (normalizedOption.includes(normalizedUser)) {
