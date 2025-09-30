@@ -198,13 +198,13 @@ const getQuestionsByIds = async (req, res) => {
 };
 
 const searchByContent = async (req, res) => {
-  const { keyword, page = 1, pageSize = 5 } = req.query;
+  const { keyword, page = 1, pageSize = 5, kindText } = req.query;
 
   if (!keyword) {
     return res.status(400).json({
       error: '参数缺失',
       message: '`keyword` 是必需的查询参数。',
-      example: '/api/questions/search-by-content?keyword=your_keyword&page=1&pageSize=5'
+      example: '/api/questions/search-by-content?keyword=your_keyword&page=1&pageSize=5&kindText=单选题'
     });
   }
 
@@ -217,14 +217,36 @@ const searchByContent = async (req, res) => {
     const likePattern = `%${escapeForLike(normalizedKeyword)}%`;
     const titleExpr = normalizedSqlExpr('title');
 
+    // 构建题型筛选条件（支持多个题型）
+    let kindTextCondition = '';
+    const params = [likePattern];
+    if (kindText) {
+      const kindTypes = kindText.split(',').map(k => k.trim()).filter(k => k);
+      if (kindTypes.length > 0) {
+        const conditions = [];
+        for (const type of kindTypes) {
+          if (type === 'single') {
+            conditions.push('(kind_text LIKE "%单选%" OR kind_text = "单项选择题")');
+          } else if (type === 'multiple') {
+            conditions.push('(kind_text LIKE "%多选%" OR kind_text = "多项选择题")');
+          } else if (type === 'judge') {
+            conditions.push('kind_text LIKE "%判断%"');
+          }
+        }
+        if (conditions.length > 0) {
+          kindTextCondition = ' AND (' + conditions.join(' OR ') + ')';
+        }
+      }
+    }
+
     // 获取所有匹配的题目（用于分组）
     const sql = `
       SELECT id, title, explain_text, difficulty_text, options_json, answer, kind_text, Qtree1, Qtree2 
       FROM questions 
-      WHERE ${titleExpr} LIKE ?
+      WHERE ${titleExpr} LIKE ?${kindTextCondition}
     `;
 
-    const allMatchedQuestions = await db.query(sql, [likePattern]);
+    const allMatchedQuestions = await db.query(sql, params);
     
     // 按 Qtree1 分组
     const groupedByQtree1 = {};
@@ -277,7 +299,7 @@ const searchByContent = async (req, res) => {
     const total = finalQuestions.length;
     const paginatedQuestions = finalQuestions.slice(offset, offset + limit);
 
-    console.log(`🔍 题干搜索: 原始关键词="${keyword}", 规范化="${normalizedKeyword}", 找到${allMatchedQuestions.length}条, ${categories.length}个分类, 筛选后${total}条结果`);
+    console.log(`🔍 题干搜索: 原始关键词="${keyword}", 规范化="${normalizedKeyword}", 题型="${kindText || '全部'}", 找到${allMatchedQuestions.length}条, ${categories.length}个分类, 筛选后${total}条结果`);
     
     res.status(200).json({
       total,
@@ -295,13 +317,13 @@ const searchByContent = async (req, res) => {
 };
 
 const searchByAnswer = async (req, res) => {
-  const { answer, page = 1, pageSize = 5 } = req.query;
+  const { answer, page = 1, pageSize = 5, kindText } = req.query;
 
   if (!answer) {
     return res.status(400).json({
       error: '参数缺失',
       message: '`answer` 是必需的查询参数。',
-      example: '/api/questions/search-by-answer?answer=your_answer&page=1&pageSize=5'
+      example: '/api/questions/search-by-answer?answer=your_answer&page=1&pageSize=5&kindText=单选题'
     });
   }
 
@@ -309,12 +331,33 @@ const searchByAnswer = async (req, res) => {
     const offset = (page - 1) * pageSize;
     const limit = parseInt(pageSize, 10);
 
+    // 构建题型筛选条件（支持多个题型）
+    let kindTextCondition = '';
+    if (kindText) {
+      const kindTypes = kindText.split(',').map(k => k.trim()).filter(k => k);
+      if (kindTypes.length > 0) {
+        const conditions = [];
+        for (const type of kindTypes) {
+          if (type === 'single') {
+            conditions.push('(kind_text LIKE "%单选%" OR kind_text = "单项选择题")');
+          } else if (type === 'multiple') {
+            conditions.push('(kind_text LIKE "%多选%" OR kind_text = "多项选择题")');
+          } else if (type === 'judge') {
+            conditions.push('kind_text LIKE "%判断%"');
+          }
+        }
+        if (conditions.length > 0) {
+          kindTextCondition = ' AND (' + conditions.join(' OR ') + ')';
+        }
+      }
+    }
+
     // 修复：根据答案字母找到对应选项内容，然后搜索该内容
     // 思路：先获取所有题目，然后在应用层过滤
     const getAllSql = `
       SELECT id, title, explain_text, difficulty_text, options_json, answer, kind_text, Qtree1, Qtree2 
       FROM questions 
-      WHERE options_json IS NOT NULL AND answer IS NOT NULL
+      WHERE options_json IS NOT NULL AND answer IS NOT NULL${kindTextCondition}
     `;
     
     const allQuestions = await db.query(getAllSql);
@@ -396,7 +439,7 @@ const searchByAnswer = async (req, res) => {
     const paginatedQuestions = finalQuestions.slice(offset, offset + limit);
 
     // 添加调试信息
-    console.log(`🔍 答案搜索: 原始关键词="${answer}", 规范化="${normalizeToSearch(answer)}", 找到${matchedQuestions.length}条, ${categories.length}个分类, 筛选后${total}条结果`);
+    console.log(`🔍 答案搜索: 原始关键词="${answer}", 规范化="${normalizeToSearch(answer)}", 题型="${kindText || '全部'}", 找到${matchedQuestions.length}条, ${categories.length}个分类, 筛选后${total}条结果`);
 
     res.status(200).json({
       total,
@@ -414,13 +457,13 @@ const searchByAnswer = async (req, res) => {
 };
 
 const searchByOptions = async (req, res) => {
-  const { option, page = 1, pageSize = 5 } = req.query;
+  const { option, page = 1, pageSize = 5, kindText } = req.query;
 
   if (!option) {
     return res.status(400).json({
       error: '参数缺失',
       message: '`option` 是必需的查询参数。',
-      example: '/api/questions/search-by-options?option=your_option&page=1&pageSize=5'
+      example: '/api/questions/search-by-options?option=your_option&page=1&pageSize=5&kindText=单选题'
     });
   }
 
@@ -433,11 +476,32 @@ const searchByOptions = async (req, res) => {
     const normalizedOption = normalizeToSearch(option);
     const likePattern = `%${escapeForLike(normalizedOption)}%`;
 
+    // 构建题型筛选条件（支持多个题型）
+    let kindTextCondition = '';
+    if (kindText) {
+      const kindTypes = kindText.split(',').map(k => k.trim()).filter(k => k);
+      if (kindTypes.length > 0) {
+        const conditions = [];
+        for (const type of kindTypes) {
+          if (type === 'single') {
+            conditions.push('(kind_text LIKE "%单选%" OR kind_text = "单项选择题")');
+          } else if (type === 'multiple') {
+            conditions.push('(kind_text LIKE "%多选%" OR kind_text = "多项选择题")');
+          } else if (type === 'judge') {
+            conditions.push('kind_text LIKE "%判断%"');
+          }
+        }
+        if (conditions.length > 0) {
+          kindTextCondition = ' AND (' + conditions.join(' OR ') + ')';
+        }
+      }
+    }
+
     // 获取所有匹配的题目（用于分组）
     const sql = `
       SELECT id, title, explain_text, difficulty_text, options_json, answer, kind_text, Qtree1, Qtree2 
       FROM questions 
-      WHERE ${optionsExpr} LIKE ?
+      WHERE ${optionsExpr} LIKE ?${kindTextCondition}
     `;
     const allMatchedQuestions = await db.query(sql, [likePattern]);
 
@@ -493,7 +557,7 @@ const searchByOptions = async (req, res) => {
     const paginatedQuestions = finalQuestions.slice(offset, offset + limit);
 
     // 添加调试信息
-    console.log(`🔍 选项搜索: 原始关键词="${option}", 规范化="${normalizedOption}", 找到${allMatchedQuestions.length}条, ${categories.length}个分类, 筛选后${total}条结果`);
+    console.log(`🔍 选项搜索: 原始关键词="${option}", 规范化="${normalizedOption}", 题型="${kindText || '全部'}", 找到${allMatchedQuestions.length}条, ${categories.length}个分类, 筛选后${total}条结果`);
 
     res.status(200).json({
       total,
